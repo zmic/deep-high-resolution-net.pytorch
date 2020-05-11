@@ -4,27 +4,32 @@
 # Licensed under The MIT License [see LICENSE for details]
 # Modified from py-faster-rcnn (https://github.com/rbgirshick/py-faster-rcnn)
 # --------------------------------------------------------
+#
+# Adapted for building the extensions on Windows. 
+#
+# All this file needs to do is to build two .pyd files from 3 source files,
+# so rather than shoe-horning nvcc into distutils.extension, just build the 
+# two extensions "ad hoc" 
+# 
 
 import os
 from os.path import join as pjoin
 from setuptools import setup
-from distutils.extension import Extension
-from Cython.Distutils import build_ext
+#from distutils.extension import Extension
+#from Cython.Distutils import build_ext
 import numpy as np
-from shutil import which
+import shutil
+import sysconfig
 
+# --------------------------------------------------------
 
-def find_in_path(name, path):
-    "Find a file in a search path"
-    # Adapted fom
-    # http://code.activestate.com/recipes/52224-find-a-file-given-a-search-path/
-    for dir in path.split(os.pathsep):
-        binpath = pjoin(dir, name)
-        if os.path.exists(binpath):
-            return os.path.abspath(binpath)
-    return None
+if shutil.which('cython.exe') is None:
+    raise RuntimeError('cython.exe must be in your path.')
 
-
+if shutil.which('cl.exe') is None:
+    raise RuntimeError('Can\'t find "cl.exe". This script must be run inside a Visual Studio environment.')
+    
+    
 def locate_cuda():
     """Locate the CUDA environment on the system
     Returns a dict with keys 'home', 'nvcc', 'include', and 'lib64'
@@ -38,7 +43,7 @@ def locate_cuda():
         home = os.environ['CUDA_PATH']
         nvcc = pjoin(home, 'bin', 'nvcc.exe')
     else:
-        nvcc = which('nvcc.exe')
+        nvcc = shutil.which('nvcc.exe')
         if nvcc is None:
             raise EnvironmentError('The nvcc binary could not be '
                 'located in your $PATH. Either add it to your path, or set $CUDA_PATH')
@@ -52,6 +57,8 @@ def locate_cuda():
             raise EnvironmentError('The CUDA %s path could not be located in %s' % (k, v))
 
     return cudaconfig
+    
+    
 CUDA = locate_cuda()
 
 
@@ -61,108 +68,31 @@ try:
 except AttributeError:
     numpy_include = np.get_numpy_include()
 
+syspaths = sysconfig.get_paths()
+python_include = syspaths['include']
+python_lib = syspaths['stdlib']
 
-def customize_compiler_for_nvcc(self):
-    """inject deep into distutils to customize how the dispatch
-    to gcc/nvcc works.
-    If you subclass UnixCCompiler, it's not trivial to get your subclass
-    injected in, and still have the right customizations (i.e.
-    distutils.sysconfig.customize_compiler) run on it. So instead of going
-    the OO route, I have this. Note, it's kindof like a wierd functional
-    subclassing going on."""
+# --------------------------------------------------------
+#
+# build cpu_nms.pyd
+#
 
-    #print(self.__class__.__dict__)
-    #print(self.src_extensions)
-    
-    # tell the compiler it can processes .cu
-    self.src_extensions.append('.cu')
-    #self.set_executable('compiler', CUDA['nvcc'])
+command = "cython cpu_nms.pyx"
+os.system(command)
 
-    # save references to the default compiler_so and _comple methods
-    #default_compiler_so = self.compiler_so
-    super = self.compile
+command = "cl /D_USRDLL /D_WINDLL /I{} /I{} cpu_nms.c /link /DLL /LIBPATH:{}s /OUT:cpu_nms.pyd".format(python_include,numpy_include, python_lib)
+os.system(command)
 
-    def compile(sources,
-                output_dir=None, macros=None, include_dirs=None, debug=0,
-                extra_preargs=None, extra_postargs=None, depends=None):
-        sources_cpp = []
-        for src in sources:
-            if os.path.splitext(src)[1] == '.cu':
-                # use the cuda for .cu files
-                args = [CUDA['nvcc']] + extra_postargs['nvcc'] + [src]
-                print(args)
-                if not self.initialized:
-                    self.initialize()
-                compile_info = self._setup_compile(output_dir, macros, include_dirs,
-                                           sources, depends, extra_postargs)
-                macros, objects, extra_postargs, pp_opts, build = compile_info                    
-                self.spawn(args)
-            else:
-                sources_cpp.append(src)
-        
-        super(sources_cpp,
-              output_dir, macros, include_dirs, debug,
-              extra_preargs, extra_postargs['cl'], depends)
+# --------------------------------------------------------
+#
+# build gpu_nms.pyd
+#
+command = "cython gpu_nms.pyx"
+os.system(command)
 
+command = '"{}" -c -arch=sm_35 --ptxas-options=-v -I{} -I{} nms_kernel_externc.cu'.format(CUDA['nvcc'], python_include, numpy_include)
+os.system(command)
 
-    # now redefine the _compile method. This gets executed for each
-    # object but distutils doesn't have the ability to change compilers
-    # based on source extension: we add it.
-    def _compile(obj, src, ext, cc_args, extra_postargs, pp_opts):
-        if os.path.splitext(src)[1] == '.cu':
-            # use the cuda for .cu files
-            print("!", src)
-            self.set_executable('compiler', CUDA['nvcc'])
-            # use only a subset of the extra_postargs, which are 1-1 translated
-            # from the extra_compile_args in the Extension class
-            postargs = extra_postargs['nvcc']
-        else:
-            postargs = extra_postargs['cl']
+command = 'cl /D_USRDLL /D_WINDLL /I{} /I{} gpu_nms.c nms_kernel_externc.obj "{}\cudart.lib" /link /DLL /LIBPATH:{}s /OUT:gpu_nms.pyd'.format(python_include, numpy_include, CUDA['lib64'], python_lib)
+os.system(command)
 
-        super(obj, src, ext, cc_args, postargs, pp_opts)
-        # reset the default compiler_so, which we might have changed for cuda
-        #self.compiler_so = default_compiler_so
-
-    # inject our redefined _compile method into the class
-    self.compile = compile
-
-
-# run the customize_compiler
-class custom_build_ext(build_ext):
-    def build_extensions(self):
-        customize_compiler_for_nvcc(self.compiler)
-        build_ext.build_extensions(self)
-
-
-ext_modules = [
-    Extension(
-        "cpu_nms",
-        ["cpu_nms.pyx"],
-        extra_compile_args={'cl': []},
-        include_dirs = [numpy_include]
-    ),
-    Extension('gpu_nms',
-        ['nms_kernel.cu', 'gpu_nms.pyx'],
-        library_dirs=[CUDA['lib64']],
-        libraries=['cudart'],
-        language='c++',
-        runtime_library_dirs=[CUDA['lib64']],
-        # this syntax is specific to this build system
-        # we're only going to use certain compiler args with nvcc and not with
-        # gcc the implementation of this trick is in customize_compiler() below
-        extra_compile_args={'cl': [],
-                            'nvcc': ['-arch=sm_35',
-                                     '--ptxas-options=-v',
-                                     '-c',
-                                     '--compiler-options',
-                                     "'-fPIC'"]},
-        include_dirs = [numpy_include, CUDA['include']]
-    ),
-]
-
-setup(
-    name='nms',
-    ext_modules=ext_modules,
-    # inject our custom trigger
-    cmdclass={'build_ext': custom_build_ext},
-)
