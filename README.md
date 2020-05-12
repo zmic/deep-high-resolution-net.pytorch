@@ -1,3 +1,13 @@
+# How to build on Windows
+
+- Install Visual Studio 2017 or 2019 with C++ options.
+- Open "x64 Native Tools Command Prompt for VS 201x"
+- cd lib\nms
+- python build_windows.py
+
+
+# Original readme:
+
 # Deep High-Resolution Representation Learning for Human Pose Estimation (CVPR 2019)
 ## News
 - [2020/03/13] A longer version is accepted by TPAMI: [Deep High-Resolution Representation Learning for Visual Recognition](https://arxiv.org/pdf/1908.07919.pdf). It includes more HRNet applications, and the codes are available: [semantic segmentation](https://github.com/HRNet/HRNet-Semantic-Segmentation),  [objection detection](https://github.com/HRNet/HRNet-Object-Detection),  [facial landmark detection](https://github.com/HRNet/HRNet-Facial-Landmark-Detection), and [image classification](https://github.com/HRNet/HRNet-Image-Classification).
