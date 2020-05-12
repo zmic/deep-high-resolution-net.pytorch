@@ -5,6 +5,9 @@
 - cd lib\nms
 - python build_windows.py
 
+# cocoapi
+- pip install pycocoapi-windows
+
 
 # Original readme:
 
